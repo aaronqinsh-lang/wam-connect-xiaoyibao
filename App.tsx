@@ -118,7 +118,11 @@ const App: React.FC = () => {
         .select('*')
         .eq('is_visible', true)
         .order('last_active', { ascending: false });
-      if (data && !error) setNearbyUsers(data.map(mapProfile));
+      if (data && !error) {
+        setNearbyUsers(data.map(mapProfile));
+      }
+    } catch (err) {
+      console.error("Fetch error:", err);
     } finally {
       setIsRefreshing(false);
     }
@@ -138,9 +142,17 @@ const App: React.FC = () => {
 
   // 物理删除用户记录
   const handleDeleteNearbyUser = async (e: React.MouseEvent, userId: string) => {
+    e.preventDefault();
     e.stopPropagation();
-    if (userId === me?.id) return triggerToast('不能删除自己');
-    if (!confirm('确定要从系统中物理删除这位伙伴的资料吗？（不可撤销）')) return;
+    
+    if (userId === me?.id) {
+      triggerToast('不能删除自己');
+      return;
+    }
+    
+    if (!window.confirm('确定要从系统中物理删除这位伙伴的资料吗？（此操作不可撤销）')) {
+      return;
+    }
 
     setIsDeleting(userId);
     try {
@@ -159,13 +171,24 @@ const App: React.FC = () => {
   };
 
   // 发起约见点击
-  const handleOpenMeetup = async (user: UserProfile) => {
+  const handleOpenMeetup = async (e: React.MouseEvent, user: UserProfile) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    if (!me) {
+      setView('setup');
+      return;
+    }
+
     setShowMeetupModal(user);
     setIceBreakerMsg('');
     setIsGeneratingMsg(true);
+    
     try {
-      const msg = await getIceBreaker(me?.role || '伙伴', user.role, user.status);
+      const msg = await getIceBreaker(me.role || '伙伴', user.role, user.status);
       setIceBreakerMsg(msg);
+    } catch (err) {
+      setIceBreakerMsg('你好，看到你也在附近，方便聊聊吗？');
     } finally {
       setIsGeneratingMsg(false);
     }
@@ -194,7 +217,7 @@ const App: React.FC = () => {
   };
 
   const handleLogout = () => {
-    if (confirm('确定要安全登出吗？')) {
+    if (window.confirm('确定要安全登出吗？')) {
       localStorage.removeItem(STORAGE_KEY);
       setMe(null);
       setNearbyUsers([]);
@@ -222,6 +245,7 @@ const App: React.FC = () => {
   };
 
   const deleteRequest = async (e: React.MouseEvent, requestId: string) => {
+    e.preventDefault();
     e.stopPropagation();
     setIsDeleting(requestId);
     try {
@@ -282,11 +306,15 @@ const App: React.FC = () => {
     const initApp = async () => {
       const savedUserId = localStorage.getItem(STORAGE_KEY);
       if (savedUserId) {
-        const { data, error } = await supabase.from('profiles').select('*').eq('id', savedUserId).maybeSingle();
-        if (data && !error) setMe(mapProfile(data));
+        try {
+          const { data, error } = await supabase.from('profiles').select('*').eq('id', savedUserId).maybeSingle();
+          if (data && !error) setMe(mapProfile(data));
+        } catch(e) {}
       }
-      const quote = await getDailyEncouragement();
-      setEncouragement(quote || '生命因互助而温暖。');
+      try {
+        const quote = await getDailyEncouragement();
+        setEncouragement(quote || '生命因互助而温暖。');
+      } catch(e) {}
       setIsInitialized(true);
     };
     initApp();
@@ -307,17 +335,17 @@ const App: React.FC = () => {
     <div className="max-w-md mx-auto min-h-screen bg-[#FDFDFD] flex flex-col relative pb-24 overflow-x-hidden">
       <Toast message={toastMsg} isVisible={showToast} />
 
-      <header className="sticky top-0 z-30 bg-white/80 backdrop-blur-2xl px-6 py-4 flex items-center justify-between border-b border-slate-50">
-        <div onClick={() => setView('home')} className="flex items-center space-x-2 cursor-pointer">
+      <header className="sticky top-0 z-30 bg-white/80 backdrop-blur-2xl px-6 py-4 flex items-center justify-between border-b border-slate-100">
+        <div onClick={() => setView('home')} className="flex items-center space-x-2 cursor-pointer btn-active">
           <WarmLogo size="w-10 h-10" />
           <h1 className="text-xl font-black text-slate-800 tracking-tighter">暖遇</h1>
         </div>
         {me ? (
-          <button onClick={() => setView('profile')} className="w-11 h-11 rounded-2xl border-2 border-brand-light p-0.5 shadow-sm active:scale-90 transition-transform bg-white overflow-hidden">
-            <img src={me.avatar} className="w-full h-full object-cover" />
+          <button type="button" onClick={() => setView('profile')} className="w-11 h-11 rounded-2xl border-2 border-brand-light p-0.5 shadow-sm active:scale-90 transition-transform bg-white overflow-hidden cursor-pointer">
+            <img src={me.avatar} className="w-full h-full object-cover" alt="Profile" />
           </button>
         ) : (
-          <button onClick={() => setView('setup')} className="bg-brand-light text-brand font-black text-xs px-4 py-2 rounded-xl active:scale-95 transition-all">注册/登录</button>
+          <button type="button" onClick={() => setView('setup')} className="bg-brand-light text-brand font-black text-xs px-4 py-2 rounded-xl active:scale-95 transition-all cursor-pointer">注册/登录</button>
         )}
       </header>
 
@@ -333,13 +361,13 @@ const App: React.FC = () => {
             </div>
             
             <div className="grid grid-cols-1 gap-4">
-              <button onClick={() => me ? setView('nearby') : setView('setup')} className="w-full p-8 bg-white rounded-[40px] shadow-sm border border-slate-50 text-left active:scale-[0.98] transition-all group">
+              <button type="button" onClick={() => me ? setView('nearby') : setView('setup')} className="w-full p-8 bg-white rounded-[40px] shadow-sm border border-slate-100 text-left active:scale-[0.98] transition-all group cursor-pointer">
                 <div className="bg-brand-light p-3 rounded-xl w-fit text-brand mb-4 shadow-inner"><Heart className="w-7 h-7 fill-current" /></div>
                 <h3 className="text-xl font-black text-slate-800">搜寻伙伴</h3>
                 <p className="text-slate-400 text-xs font-bold mt-1">发现周围志同道合的人</p>
               </button>
               
-              <button onClick={() => me ? setView('messages') : setView('setup')} className="w-full p-8 bg-white rounded-[40px] shadow-sm border border-slate-50 text-left active:scale-[0.98] transition-all relative">
+              <button type="button" onClick={() => me ? setView('messages') : setView('setup')} className="w-full p-8 bg-white rounded-[40px] shadow-sm border border-slate-100 text-left active:scale-[0.98] transition-all relative cursor-pointer">
                 <div className="bg-accent-light p-3 rounded-xl w-fit text-accent mb-4 shadow-inner"><Bell className="w-7 h-7 fill-current" /></div>
                 <h3 className="text-xl font-black text-slate-800">约见通知</h3>
                 <p className="text-slate-400 text-xs font-bold mt-1">管理你的互动与连结</p>
@@ -355,7 +383,7 @@ const App: React.FC = () => {
           <div className="p-6 space-y-4">
             <div className="flex items-center justify-between px-2">
               <h2 className="text-xl font-black text-slate-800">附近的伙伴</h2>
-              <button onClick={fetchNearby} className="p-2 text-slate-300 hover:text-brand transition-colors">
+              <button type="button" onClick={fetchNearby} className="p-2 text-slate-300 hover:text-brand transition-colors cursor-pointer">
                 <RotateCcw className={`w-5 h-5 ${isRefreshing ? 'animate-spin' : ''}`} />
               </button>
             </div>
@@ -364,29 +392,39 @@ const App: React.FC = () => {
             ) : nearbyUsers.map(user => (
               <div 
                 key={user.id} 
-                className={`bg-white p-7 rounded-[35px] shadow-sm border border-slate-100 mb-4 relative transition-all ${isDeleting === user.id ? 'opacity-50 scale-95 pointer-events-none' : ''}`}
+                className={`bg-white p-7 rounded-[35px] shadow-sm border border-slate-100 mb-4 relative ${isDeleting === user.id ? 'opacity-50 pointer-events-none' : ''}`}
               >
                 {user.id !== me?.id && (
-                  <button onClick={(e) => handleDeleteNearbyUser(e, user.id)} className="absolute top-6 right-6 p-2 text-slate-200 hover:text-accent active:scale-75 transition-all z-20">
-                    <Trash2 className="w-4 h-4" />
+                  <button 
+                    type="button"
+                    onClick={(e) => handleDeleteNearbyUser(e, user.id)} 
+                    className="absolute top-5 right-5 p-3 text-slate-200 hover:text-accent active:scale-75 transition-all z-30 cursor-pointer"
+                    title="彻底删除此记录"
+                  >
+                    <Trash2 className="w-5 h-5" />
                   </button>
                 )}
                 
                 <div className="flex items-center space-x-4 mb-6">
                   <div className="relative shrink-0">
                     <div className="w-16 h-16 rounded-2xl border-2 border-slate-50 overflow-hidden bg-brand-light/20">
-                      <img src={user.avatar} className="w-full h-full object-cover" />
+                      <img src={user.avatar} className="w-full h-full object-cover" alt={user.nickname} />
                     </div>
                     <div className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-white shadow-sm ${getStatusColor(user.lastActive)}`} />
                   </div>
-                  <div>
-                    <span className="font-black text-lg text-slate-800">{user.nickname}{user.id === me?.id ? ' (我)' : ''}</span>
-                    <div className="flex items-center text-brand font-bold text-[10px] mt-0.5"><MapPin className="w-3 h-3 mr-1" />{user.locationName}</div>
+                  <div className="min-w-0 flex-1">
+                    <span className="font-black text-lg text-slate-800 truncate block">{user.nickname}{user.id === me?.id ? ' (我)' : ''}</span>
+                    <div className="flex items-center text-brand font-bold text-[10px] mt-0.5 truncate">
+                      <MapPin className="w-3 h-3 mr-1 flex-shrink-0" />
+                      <span className="truncate">{user.locationName}</span>
+                    </div>
                   </div>
                 </div>
+                
                 <button 
-                  onClick={() => handleOpenMeetup(user)} 
-                  className="w-full py-4 bg-slate-900 text-white rounded-2xl font-black text-sm flex items-center justify-center space-x-2 active:scale-95 transition-all shadow-lg shadow-slate-200"
+                  type="button"
+                  onClick={(e) => handleOpenMeetup(e, user)} 
+                  className="w-full py-4 bg-slate-900 text-white rounded-2xl font-black text-sm flex items-center justify-center space-x-2 active:scale-[0.97] transition-all shadow-lg shadow-slate-200 cursor-pointer relative z-20"
                 >
                   <Send className="w-4 h-4" />
                   <span>发起约见</span>
@@ -407,12 +445,12 @@ const App: React.FC = () => {
                 <div 
                   key={req.id} 
                   onClick={() => setSelectedRequest(req)}
-                  className={`bg-white p-5 rounded-[30px] shadow-sm border border-slate-50 mb-2 active:scale-[0.98] transition-all flex items-center justify-between cursor-pointer relative overflow-hidden ${isDeleting === req.id ? 'opacity-50' : ''}`}
+                  className={`bg-white p-5 rounded-[30px] shadow-sm border border-slate-100 mb-2 active:scale-[0.98] transition-all flex items-center justify-between cursor-pointer relative overflow-hidden ${isDeleting === req.id ? 'opacity-50' : ''}`}
                 >
                   {req.status === 'accepted' && <div className="absolute top-0 left-0 bottom-0 w-1 bg-brand" />}
                   <div className="flex items-center space-x-4 min-w-0">
                     <div className="relative shrink-0">
-                      <img src={other?.avatar} className="w-12 h-12 rounded-xl shrink-0 border border-slate-50 object-cover" />
+                      <img src={other?.avatar} className="w-12 h-12 rounded-xl shrink-0 border border-slate-50 object-cover" alt={other?.nickname} />
                       <div className={`absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border border-white ${getStatusColor(other?.last_active)}`} />
                     </div>
                     <div className="truncate">
@@ -424,7 +462,7 @@ const App: React.FC = () => {
                     <span className={`text-[8px] font-black uppercase px-2 py-1 rounded-full ${req.status === 'pending' ? 'bg-accent-light text-accent' : req.status === 'accepted' ? 'bg-brand-light text-brand' : 'bg-slate-50 text-slate-300'}`}>
                       {req.status === 'pending' ? '待定' : req.status === 'accepted' ? '连结' : '已拒'}
                     </span>
-                    <button onClick={(e) => deleteRequest(e, req.id)} className="p-2 text-slate-200 hover:text-accent transition-all"><Trash2 className="w-3.5 h-3.5" /></button>
+                    <button type="button" onClick={(e) => deleteRequest(e, req.id)} className="p-2 text-slate-200 hover:text-accent transition-all cursor-pointer"><Trash2 className="w-3.5 h-3.5" /></button>
                   </div>
                 </div>
               );
@@ -434,10 +472,10 @@ const App: React.FC = () => {
 
         {view === 'profile' && me && (
           <div className="p-6 space-y-6">
-            <div className="bg-white p-8 rounded-[40px] text-center border border-slate-50 shadow-sm">
+            <div className="bg-white p-8 rounded-[40px] text-center border border-slate-100 shadow-sm">
                <div className="relative w-24 h-24 mx-auto mb-4">
                  <div className="w-24 h-24 rounded-3xl border-4 border-brand-light p-0.5 shadow-md bg-white overflow-hidden">
-                   <img src={me.avatar} className="w-full h-full object-cover" />
+                   <img src={me.avatar} className="w-full h-full object-cover" alt="Me" />
                  </div>
                  <div className="absolute bottom-1 right-1 w-5 h-5 rounded-full border-4 border-white bg-green-500" />
                </div>
@@ -445,14 +483,14 @@ const App: React.FC = () => {
                <span className="text-brand font-black text-[10px] bg-brand-light px-3 py-1 rounded-full uppercase mt-2 inline-block tracking-widest">{me.role}</span>
             </div>
             <div className="space-y-3">
-              <button onClick={() => setView('edit-profile')} className="w-full p-5 bg-white rounded-[25px] flex items-center justify-between border border-slate-50 shadow-sm active:bg-slate-50 transition-all">
+              <button type="button" onClick={() => setView('edit-profile')} className="w-full p-5 bg-white rounded-[25px] flex items-center justify-between border border-slate-100 shadow-sm active:bg-slate-50 transition-all cursor-pointer">
                 <div className="flex items-center space-x-4">
                   <div className="p-3 bg-brand-light rounded-xl text-brand shadow-inner"><User className="w-5 h-5" /></div>
                   <span className="font-black text-slate-700">编辑名片</span>
                 </div>
                 <ChevronRight className="w-5 h-5 text-slate-200" />
               </button>
-              <button onClick={handleLogout} className="w-full p-5 bg-white rounded-[25px] flex items-center justify-between border border-slate-50 shadow-sm active:bg-slate-50 transition-all text-accent">
+              <button type="button" onClick={handleLogout} className="w-full p-5 bg-white rounded-[25px] flex items-center justify-between border border-slate-100 shadow-sm active:bg-slate-50 transition-all text-accent cursor-pointer">
                 <div className="flex items-center space-x-4">
                   <div className="p-3 bg-accent-light rounded-xl shadow-inner"><LogOut className="w-5 h-5" /></div>
                   <span className="font-black">安全登出</span>
@@ -477,16 +515,16 @@ const App: React.FC = () => {
                   <option value={UserRole.CAREGIVER}>我是家属</option>
                   <option value={UserRole.VOLUNTEER}>我是志愿者</option>
                 </select>
-                <input name="status" defaultValue={me?.status} placeholder="当前状态 (如: 正在等候、心情不错)" className="w-full p-5 bg-white rounded-2xl text-base font-bold shadow-sm border border-slate-50 outline-none" />
+                <input name="status" defaultValue={me?.status} placeholder="当前状态 (如: 正在等候、心情不错)" className="w-full p-5 bg-white rounded-2xl text-base font-bold shadow-sm border border-slate-100 outline-none" />
                 <div className="flex items-center space-x-2">
-                  <input name="locationName" defaultValue={me?.locationName} placeholder="位置描述 (如: A座3楼)" className="flex-1 p-5 bg-white rounded-2xl text-base font-bold shadow-sm border border-slate-50 outline-none" />
-                  <button type="button" onClick={getGeoLocation} className="p-5 bg-brand text-white rounded-2xl shadow-lg active:scale-90 transition-all"><LocateFixed className={`w-5 h-5 ${isLocating ? 'animate-spin' : ''}`} /></button>
+                  <input name="locationName" defaultValue={me?.locationName} placeholder="位置描述 (如: A座3楼)" className="flex-1 p-5 bg-white rounded-2xl text-base font-bold shadow-sm border border-slate-100 outline-none" />
+                  <button type="button" onClick={getGeoLocation} className="p-5 bg-brand text-white rounded-2xl shadow-lg active:scale-90 transition-all cursor-pointer"><LocateFixed className={`w-5 h-5 ${isLocating ? 'animate-spin' : ''}`} /></button>
                 </div>
                 <input name="wechatId" required defaultValue={me?.wechatId} placeholder="微信号 (仅在双方同意后展示)" className="w-full p-5 bg-slate-50 rounded-2xl text-lg font-black outline-none border border-slate-100" />
               </div>
               <div className="pt-2 flex space-x-3">
-                {view === 'edit-profile' && <button type="button" onClick={() => setView('profile')} className="w-1/3 py-5 bg-slate-50 text-slate-400 rounded-2xl font-black active:bg-slate-100">取消</button>}
-                <button type="submit" disabled={isSaving} className="flex-1 py-5 bg-slate-900 text-white rounded-2xl font-black text-xl shadow-xl active:scale-95 transition-all">
+                {view === 'edit-profile' && <button type="button" onClick={() => setView('profile')} className="w-1/3 py-5 bg-slate-50 text-slate-400 rounded-2xl font-black active:bg-slate-100 cursor-pointer">取消</button>}
+                <button type="submit" disabled={isSaving} className="flex-1 py-5 bg-slate-900 text-white rounded-2xl font-black text-xl shadow-xl active:scale-95 transition-all cursor-pointer">
                   {isSaving ? <RefreshCcw className="animate-spin w-6 h-6 mx-auto" /> : '同步资料'}
                 </button>
               </div>
@@ -501,7 +539,7 @@ const App: React.FC = () => {
           <div className="bg-white w-full max-w-md rounded-[45px] p-8 shadow-2xl space-y-8 animate-in slide-in-from-bottom duration-500">
             <div className="text-center relative">
               <div className="w-20 h-20 rounded-[25px] mx-auto mb-4 border-2 border-brand-light shadow-md overflow-hidden bg-white">
-                 <img src={showMeetupModal.avatar} className="w-full h-full object-cover" />
+                 <img src={showMeetupModal.avatar} className="w-full h-full object-cover" alt="Target" />
               </div>
               <h3 className="text-2xl font-black text-slate-800">发起约见</h3>
               <p className="text-slate-400 text-xs font-bold mt-1">给 {showMeetupModal.nickname} 发送一段暖心邀请</p>
@@ -518,13 +556,14 @@ const App: React.FC = () => {
             </div>
             <div className="grid grid-cols-1 gap-3">
               <button 
+                type="button"
                 onClick={handleSendMeetupRequest} 
                 disabled={isSendingRequest || isGeneratingMsg} 
-                className="w-full py-5 bg-brand text-white rounded-[25px] font-black text-lg shadow-xl active:scale-95 transition-all flex items-center justify-center space-x-3 disabled:opacity-50"
+                className="w-full py-5 bg-brand text-white rounded-[25px] font-black text-lg shadow-xl active:scale-95 transition-all flex items-center justify-center space-x-3 disabled:opacity-50 cursor-pointer"
               >
                 {isSendingRequest ? <RefreshCcw className="animate-spin w-6 h-6" /> : <><Send className="w-6 h-6" /><span>发出邀请</span></>}
               </button>
-              <button onClick={() => setShowMeetupModal(null)} className="w-full py-4 bg-slate-50 text-slate-300 rounded-[25px] font-black active:bg-slate-100 transition-all">取消</button>
+              <button type="button" onClick={() => setShowMeetupModal(null)} className="w-full py-4 bg-slate-50 text-slate-300 rounded-[25px] font-black active:bg-slate-100 transition-all cursor-pointer">取消</button>
             </div>
           </div>
         </div>
@@ -536,7 +575,7 @@ const App: React.FC = () => {
           <div className="bg-white w-full rounded-[45px] overflow-hidden shadow-2xl animate-in zoom-in duration-300 max-h-[80vh] flex flex-col">
             <div className="p-6 pb-2 flex justify-between items-center">
               <h3 className="text-xl font-black text-slate-800">约见详情</h3>
-              <button onClick={() => setSelectedRequest(null)} className="p-2 bg-slate-50 rounded-full text-slate-400 active:scale-90 transition-all"><XCircle className="w-6 h-6" /></button>
+              <button type="button" onClick={() => setSelectedRequest(null)} className="p-2 bg-slate-50 rounded-full text-slate-400 active:scale-90 transition-all cursor-pointer"><XCircle className="w-6 h-6" /></button>
             </div>
             <div className="flex-1 overflow-y-auto p-6 pt-2 space-y-6">
               <div className="flex items-center space-x-4 bg-brand-light/20 p-5 rounded-[25px]">
@@ -545,7 +584,7 @@ const App: React.FC = () => {
                   return (
                     <>
                       <div className="relative shrink-0">
-                        <img src={other?.avatar} className="w-16 h-16 rounded-[20px] shadow-sm border-2 border-white object-cover" />
+                        <img src={other?.avatar} className="w-16 h-16 rounded-[20px] shadow-sm border-2 border-white object-cover" alt="Other" />
                         <div className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-white ${getStatusColor(other?.last_active)}`} />
                       </div>
                       <div className="min-w-0 flex-1">
@@ -563,8 +602,8 @@ const App: React.FC = () => {
               {selectedRequest.status === 'pending' ? (
                 selectedRequest.to_user_id === me?.id ? (
                   <div className="grid grid-cols-2 gap-3 pt-2">
-                    <button disabled={isProcessingAction} onClick={() => updateRequestStatus(selectedRequest.id, 'accepted')} className="py-5 bg-brand text-white rounded-[25px] font-black shadow-lg active:scale-95 transition-all flex items-center justify-center">{isProcessingAction ? <RefreshCcw className="animate-spin w-5 h-5" /> : '接受连结'}</button>
-                    <button disabled={isProcessingAction} onClick={() => updateRequestStatus(selectedRequest.id, 'rejected')} className="py-5 bg-slate-100 text-slate-400 rounded-[25px] font-black active:bg-slate-200 transition-all">婉拒</button>
+                    <button type="button" disabled={isProcessingAction} onClick={() => updateRequestStatus(selectedRequest.id, 'accepted')} className="py-5 bg-brand text-white rounded-[25px] font-black shadow-lg active:scale-95 transition-all flex items-center justify-center cursor-pointer">{isProcessingAction ? <RefreshCcw className="animate-spin w-5 h-5" /> : '接受连结'}</button>
+                    <button type="button" disabled={isProcessingAction} onClick={() => updateRequestStatus(selectedRequest.id, 'rejected')} className="py-5 bg-slate-100 text-slate-400 rounded-[25px] font-black active:bg-slate-200 transition-all cursor-pointer">婉拒</button>
                   </div>
                 ) : (
                   <div className="text-center py-6 bg-slate-50 rounded-[25px] border border-dashed border-slate-200 animate-pulse text-slate-400 font-bold text-sm">等待回应中...</div>
@@ -575,10 +614,10 @@ const App: React.FC = () => {
                     <PartyPopper className="w-8 h-8 text-brand mx-auto mb-3" />
                     <p className="text-slate-400 font-bold text-xs mb-3">伙伴的微信号：</p>
                     <div className="text-2xl font-black text-brand tracking-widest mb-6">{(selectedRequest.from_user_id === me?.id ? selectedRequest.to_profile : selectedRequest.from_profile)?.wechat_id}</div>
-                    <button onClick={() => {
+                    <button type="button" onClick={() => {
                       const wechat = (selectedRequest.from_user_id === me?.id ? selectedRequest.to_profile : selectedRequest.from_profile)?.wechat_id;
                       navigator.clipboard.writeText(wechat).then(() => { triggerToast('微信号已复制'); setTimeout(() => { window.location.href = 'weixin://'; }, 700); });
-                    }} className="w-full py-5 bg-brand text-white rounded-[25px] font-black shadow-lg flex items-center justify-center space-x-2 active:scale-95 transition-all">
+                    }} className="w-full py-5 bg-brand text-white rounded-[25px] font-black shadow-lg flex items-center justify-center space-x-2 active:scale-95 transition-all cursor-pointer">
                       <MessageSquare className="w-5 h-5" />
                       <span>复制并去微信</span>
                     </button>
@@ -591,14 +630,14 @@ const App: React.FC = () => {
                 </div>
               )}
               
-              <button onClick={(e) => deleteRequest(e, selectedRequest.id)} className="w-full py-3 text-slate-200 hover:text-accent font-bold text-xs border-2 border-dashed border-slate-50 rounded-[20px] flex items-center justify-center space-x-2 active:bg-slate-50 transition-all"><Trash2 className="w-3.5 h-3.5" /><span>移除记录</span></button>
+              <button type="button" onClick={(e) => deleteRequest(e, selectedRequest.id)} className="w-full py-3 text-slate-200 hover:text-accent font-bold text-xs border-2 border-dashed border-slate-50 rounded-[20px] flex items-center justify-center space-x-2 active:bg-slate-50 transition-all cursor-pointer"><Trash2 className="w-3.5 h-3.5" /><span>移除记录</span></button>
             </div>
           </div>
         </div>
       )}
 
       {/* 底部导航栏 */}
-      <nav className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-white/90 backdrop-blur-2xl px-12 py-4 pb-8 flex justify-between items-center z-40 rounded-t-[40px] shadow-[0_-10px_40px_rgba(0,0,0,0.03)] border-t border-slate-50">
+      <nav className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-white/90 backdrop-blur-2xl px-12 py-4 pb-8 flex justify-between items-center z-40 rounded-t-[40px] shadow-[0_-10px_40px_rgba(0,0,0,0.03)] border-t border-slate-100">
         {[
           { id: 'home', label: '首页', icon: Smile },
           { id: 'nearby', label: '发现', icon: Heart },
@@ -606,9 +645,10 @@ const App: React.FC = () => {
           { id: 'profile', label: '我的', icon: User }
         ].map(item => (
           <button 
+            type="button"
             key={item.id} 
             onClick={() => me ? setView(item.id as any) : setView('setup')} 
-            className={`flex flex-col items-center transition-all duration-300 ${view === item.id ? 'text-brand scale-105' : 'text-slate-300'}`}
+            className={`flex flex-col items-center transition-all duration-300 cursor-pointer ${view === item.id ? 'text-brand scale-105' : 'text-slate-300'}`}
           >
             <item.icon className={`w-6 h-6 transition-colors ${view === item.id ? 'fill-current' : ''}`} />
             <span className={`text-[9px] font-black uppercase tracking-tighter mt-1 ${view === item.id ? 'opacity-100' : 'opacity-60'}`}>{item.label}</span>
