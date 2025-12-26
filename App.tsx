@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { 
   MapPin, 
   Heart, 
@@ -16,7 +16,8 @@ import {
   Smile,
   LogOut,
   PartyPopper,
-  Bell
+  Bell,
+  Loader2
 } from 'lucide-react';
 import { UserProfile, UserRole, LocationState } from './types';
 import { getDailyEncouragement, getIceBreaker } from './services/geminiService';
@@ -43,10 +44,7 @@ const WarmLogo: React.FC<{ size: string, seed?: string, className?: string, onCl
 };
 
 /**
- * 计算用户在线状态颜色
- * 绿色：5分钟内活跃
- * 橙色：1小时内活跃
- * 灰色：不活跃
+ * 状态指示器辅助
  */
 const getStatusColor = (lastActive: string) => {
   if (!lastActive) return 'bg-slate-400';
@@ -59,7 +57,7 @@ const getStatusColor = (lastActive: string) => {
 };
 
 /**
- * 全局提示组件
+ * 全局提示
  */
 const Toast: React.FC<{ message: string; isVisible: boolean }> = ({ message, isVisible }) => (
   <div className={`fixed bottom-24 left-1/2 -translate-x-1/2 z-[100] transition-all duration-500 transform ${isVisible ? 'translate-y-0 opacity-100 scale-100' : 'translate-y-10 opacity-0 scale-90 pointer-events-none'}`}>
@@ -71,7 +69,6 @@ const Toast: React.FC<{ message: string; isVisible: boolean }> = ({ message, isV
 );
 
 const App: React.FC = () => {
-  // --- 状态定义 ---
   const [view, setView] = useState<'home' | 'nearby' | 'messages' | 'profile' | 'setup' | 'edit-profile'>('home');
   const [me, setMe] = useState<UserProfile | null>(null);
   const [nearbyUsers, setNearbyUsers] = useState<UserProfile[]>([]);
@@ -85,13 +82,13 @@ const App: React.FC = () => {
   const [isLocating, setIsLocating] = useState(false);
   const [showMeetupModal, setShowMeetupModal] = useState<UserProfile | null>(null);
   const [iceBreakerMsg, setIceBreakerMsg] = useState('');
+  const [isGeneratingMsg, setIsGeneratingMsg] = useState(false);
   const [isSendingRequest, setIsSendingRequest] = useState(false);
   const [isDeleting, setIsDeleting] = useState<string | null>(null);
   const [toastMsg, setToastMsg] = useState('');
   const [showToast, setShowToast] = useState(false);
   const [isProcessingAction, setIsProcessingAction] = useState(false);
 
-  // --- 基础工具 ---
   const triggerToast = (msg: string) => {
     setToastMsg(msg);
     setShowToast(true);
@@ -112,56 +109,6 @@ const App: React.FC = () => {
     lastLng: data.last_lng
   }), []);
 
-  // --- 核心逻辑 ---
-
-  // 1. 物理删除伙伴资料 (闭环实现)
-  const deleteNearbyUser = async (e: React.MouseEvent, userId: string) => {
-    e.stopPropagation();
-    if (userId === me?.id) {
-      triggerToast('不能删除自己哦');
-      return;
-    }
-    if (!confirm('确定要从系统中彻底删除这位伙伴的资料吗？（此操作不可撤销）')) return;
-
-    setIsDeleting(userId);
-    try {
-      // 在 Supabase 端物理删除
-      const { error } = await supabase.from('profiles').delete().eq('id', userId);
-      if (!error) {
-        // 前端 UI 同步闭环：过滤掉已删除的用户
-        setNearbyUsers(prev => prev.filter(u => u.id !== userId));
-        triggerToast('已彻底删除该记录');
-      } else {
-        triggerToast('删除失败：' + error.message);
-      }
-    } catch (err) {
-      console.error(err);
-      triggerToast('操作异常');
-    } finally {
-      setIsDeleting(null);
-    }
-  };
-
-  // 2. 安全登出 (清除所有状态并返回初始页)
-  const handleLogout = () => {
-    if (confirm('确定要安全登出吗？')) {
-      // 物理清除 localStorage 记录 (Cookie 替代方案)
-      localStorage.removeItem(STORAGE_KEY);
-      
-      // 重置应用所有关联状态
-      setMe(null);
-      setNearbyUsers([]);
-      setRequests([]);
-      setSelectedRequest(null);
-      setLocation(null);
-      
-      // 强制返回首页 (登录前状态)
-      setView('home');
-      triggerToast('已安全退出');
-    }
-  };
-
-  // 3. 获取附近用户
   const fetchNearby = useCallback(async () => {
     if (!me) return;
     setIsRefreshing(true);
@@ -187,17 +134,87 @@ const App: React.FC = () => {
     if (data && !error) setRequests(data);
   }, [me]);
 
+  // --- 处理函数 ---
+
+  // 物理删除用户记录
+  const handleDeleteNearbyUser = async (e: React.MouseEvent, userId: string) => {
+    e.stopPropagation();
+    if (userId === me?.id) return triggerToast('不能删除自己');
+    if (!confirm('确定要从系统中物理删除这位伙伴的资料吗？（不可撤销）')) return;
+
+    setIsDeleting(userId);
+    try {
+      const { error } = await supabase.from('profiles').delete().eq('id', userId);
+      if (!error) {
+        setNearbyUsers(prev => prev.filter(u => u.id !== userId));
+        triggerToast('记录已永久移除');
+      } else {
+        triggerToast('删除失败: ' + error.message);
+      }
+    } catch (err) {
+      triggerToast('系统异常');
+    } finally {
+      setIsDeleting(null);
+    }
+  };
+
+  // 发起约见点击
+  const handleOpenMeetup = async (user: UserProfile) => {
+    setShowMeetupModal(user);
+    setIceBreakerMsg('');
+    setIsGeneratingMsg(true);
+    try {
+      const msg = await getIceBreaker(me?.role || '伙伴', user.role, user.status);
+      setIceBreakerMsg(msg);
+    } finally {
+      setIsGeneratingMsg(false);
+    }
+  };
+
+  const handleSendMeetupRequest = async () => {
+    if (!me || !showMeetupModal || isSendingRequest) return;
+    setIsSendingRequest(true);
+    try {
+      const { error } = await supabase.from('meetup_requests').insert({
+        from_user_id: me.id,
+        to_user_id: showMeetupModal.id,
+        status: 'pending',
+        message: iceBreakerMsg,
+        created_at: new Date().toISOString()
+      });
+      if (!error) {
+        setShowMeetupModal(null);
+        triggerToast('邀请已发出');
+        fetchMessages();
+        setView('messages');
+      }
+    } finally {
+      setIsSendingRequest(false);
+    }
+  };
+
+  const handleLogout = () => {
+    if (confirm('确定要安全登出吗？')) {
+      localStorage.removeItem(STORAGE_KEY);
+      setMe(null);
+      setNearbyUsers([]);
+      setRequests([]);
+      setView('home');
+      triggerToast('已安全退出');
+    }
+  };
+
   const updateRequestStatus = async (requestId: string, status: 'accepted' | 'rejected') => {
     if (isProcessingAction) return;
     setIsProcessingAction(true);
     try {
       const { error } = await supabase.from('meetup_requests').update({ status }).eq('id', requestId);
       if (!error) {
-        await fetchMessages();
-        if (selectedRequest && selectedRequest.id === requestId) {
+        fetchMessages();
+        if (selectedRequest?.id === requestId) {
           setSelectedRequest((prev: any) => ({ ...prev, status }));
         }
-        triggerToast(status === 'accepted' ? '连结成功！' : '已谢绝邀请');
+        triggerToast(status === 'accepted' ? '连结成功！' : '已婉拒');
       }
     } finally {
       setIsProcessingAction(false);
@@ -207,47 +224,17 @@ const App: React.FC = () => {
   const deleteRequest = async (e: React.MouseEvent, requestId: string) => {
     e.stopPropagation();
     setIsDeleting(requestId);
-    setTimeout(async () => {
+    try {
       const { error } = await supabase.from('meetup_requests').delete().eq('id', requestId);
       if (!error) {
         setRequests(prev => prev.filter(r => r.id !== requestId));
         if (selectedRequest?.id === requestId) setSelectedRequest(null);
         triggerToast('记录已移除');
       }
-      setIsDeleting(null);
-    }, 300);
-  };
-
-  const handleCopyAndOpenWechat = (wechatId: string) => {
-    navigator.clipboard.writeText(wechatId).then(() => {
-      triggerToast('微信号已复制');
-      setTimeout(() => {
-        window.location.href = 'weixin://';
-      }, 700);
-    });
-  };
-
-  const handleRequest = useCallback(async (target: UserProfile) => {
-    if (!me || isSendingRequest) return;
-    setIsSendingRequest(true);
-    try {
-      const { error } = await supabase.from('meetup_requests').insert({
-        from_user_id: me.id,
-        to_user_id: target.id,
-        status: 'pending',
-        message: iceBreakerMsg,
-        created_at: new Date().toISOString()
-      });
-      if (!error) {
-        setShowMeetupModal(null);
-        triggerToast('邀请已发出');
-        await fetchMessages();
-        setView('messages');
-      }
     } finally {
-      setIsSendingRequest(false);
+      setIsDeleting(null);
     }
-  }, [me, iceBreakerMsg, isSendingRequest, fetchMessages]);
+  };
 
   const handleSetupOrUpdate = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -272,7 +259,7 @@ const App: React.FC = () => {
         setMe(mapProfile(data)); 
         localStorage.setItem(STORAGE_KEY, data.id); 
         setView('home'); 
-        triggerToast('资料已同步'); 
+        triggerToast('名片已同步'); 
       }
     } finally { setIsSaving(false); }
   };
@@ -286,31 +273,18 @@ const App: React.FC = () => {
         setIsLocating(false); 
         triggerToast('定位成功'); 
       },
-      () => { 
-        setIsLocating(false); 
-        triggerToast('定位失败'); 
-      },
+      () => { setIsLocating(false); triggerToast('定位失败'); },
       { enableHighAccuracy: true, timeout: 8000 }
     );
   }, []);
 
-  // 初始化：持久化登录识别
   useEffect(() => {
     const initApp = async () => {
       const savedUserId = localStorage.getItem(STORAGE_KEY);
       if (savedUserId) {
-        try {
-          const { data, error } = await supabase.from('profiles').select('*').eq('id', savedUserId).maybeSingle();
-          if (data && !error) {
-            setMe(mapProfile(data));
-          } else {
-            localStorage.removeItem(STORAGE_KEY);
-          }
-        } catch (e) {
-          console.error("Auto login error", e);
-        }
+        const { data, error } = await supabase.from('profiles').select('*').eq('id', savedUserId).maybeSingle();
+        if (data && !error) setMe(mapProfile(data));
       }
-      
       const quote = await getDailyEncouragement();
       setEncouragement(quote || '生命因互助而温暖。');
       setIsInitialized(true);
@@ -323,25 +297,23 @@ const App: React.FC = () => {
     if (view === 'messages' && me) fetchMessages();
   }, [view, me?.id, fetchNearby, fetchMessages]);
 
-  if (!isInitialized) {
-    return (
-      <div className="min-h-screen bg-brand-light/30 flex items-center justify-center p-10">
-        <WarmLogo size="w-32 h-32" className="animate-bounce" />
-      </div>
-    );
-  }
+  if (!isInitialized) return (
+    <div className="min-h-screen bg-brand-light/30 flex items-center justify-center">
+      <WarmLogo size="w-32 h-32" className="animate-bounce" />
+    </div>
+  );
 
   return (
     <div className="max-w-md mx-auto min-h-screen bg-[#FDFDFD] flex flex-col relative pb-24 overflow-x-hidden">
       <Toast message={toastMsg} isVisible={showToast} />
 
-      <header className="sticky top-0 z-30 bg-white/80 backdrop-blur-2xl px-6 py-4 flex items-center justify-between">
+      <header className="sticky top-0 z-30 bg-white/80 backdrop-blur-2xl px-6 py-4 flex items-center justify-between border-b border-slate-50">
         <div onClick={() => setView('home')} className="flex items-center space-x-2 cursor-pointer">
           <WarmLogo size="w-10 h-10" />
           <h1 className="text-xl font-black text-slate-800 tracking-tighter">暖遇</h1>
         </div>
         {me ? (
-          <button onClick={() => setView('profile')} className="w-11 h-11 rounded-2xl border-2 border-brand-light p-0.5 shadow-sm active:scale-90 transition-transform overflow-hidden bg-white">
+          <button onClick={() => setView('profile')} className="w-11 h-11 rounded-2xl border-2 border-brand-light p-0.5 shadow-sm active:scale-90 transition-transform bg-white overflow-hidden">
             <img src={me.avatar} className="w-full h-full object-cover" />
           </button>
         ) : (
@@ -361,19 +333,13 @@ const App: React.FC = () => {
             </div>
             
             <div className="grid grid-cols-1 gap-4">
-              <button 
-                onClick={() => me ? setView('nearby') : setView('setup')} 
-                className="w-full p-8 bg-white rounded-[40px] shadow-sm border border-slate-50 text-left active:scale-[0.98] transition-all group"
-              >
+              <button onClick={() => me ? setView('nearby') : setView('setup')} className="w-full p-8 bg-white rounded-[40px] shadow-sm border border-slate-50 text-left active:scale-[0.98] transition-all group">
                 <div className="bg-brand-light p-3 rounded-xl w-fit text-brand mb-4 shadow-inner"><Heart className="w-7 h-7 fill-current" /></div>
                 <h3 className="text-xl font-black text-slate-800">搜寻伙伴</h3>
                 <p className="text-slate-400 text-xs font-bold mt-1">发现周围志同道合的人</p>
               </button>
               
-              <button 
-                onClick={() => me ? setView('messages') : setView('setup')} 
-                className="w-full p-8 bg-white rounded-[40px] shadow-sm border border-slate-50 text-left active:scale-[0.98] transition-all relative"
-              >
+              <button onClick={() => me ? setView('messages') : setView('setup')} className="w-full p-8 bg-white rounded-[40px] shadow-sm border border-slate-50 text-left active:scale-[0.98] transition-all relative">
                 <div className="bg-accent-light p-3 rounded-xl w-fit text-accent mb-4 shadow-inner"><Bell className="w-7 h-7 fill-current" /></div>
                 <h3 className="text-xl font-black text-slate-800">约见通知</h3>
                 <p className="text-slate-400 text-xs font-bold mt-1">管理你的互动与连结</p>
@@ -393,16 +359,17 @@ const App: React.FC = () => {
                 <RotateCcw className={`w-5 h-5 ${isRefreshing ? 'animate-spin' : ''}`} />
               </button>
             </div>
-            {nearbyUsers.map(user => (
+            {nearbyUsers.length === 0 ? (
+              <div className="py-20 text-center text-slate-300 font-bold">暂无伙伴在线</div>
+            ) : nearbyUsers.map(user => (
               <div 
                 key={user.id} 
-                className={`bg-white p-7 rounded-[35px] shadow-sm border border-slate-50 mb-4 relative transition-all duration-500 transform ${isDeleting === user.id ? 'scale-90 opacity-0' : 'scale-100 opacity-100'}`}
+                className={`bg-white p-7 rounded-[35px] shadow-sm border border-slate-100 mb-4 relative transition-all ${isDeleting === user.id ? 'opacity-50 scale-95 pointer-events-none' : ''}`}
               >
-                {/* 修复：Trash2 按钮现在调用 deleteNearbyUser 执行物理删除 */}
                 {user.id !== me?.id && (
-                   <button onClick={(e) => deleteNearbyUser(e, user.id)} className="absolute top-6 right-6 p-2 text-slate-200 hover:text-accent transition-all active:scale-75 z-20">
-                     <Trash2 className="w-4 h-4" />
-                   </button>
+                  <button onClick={(e) => handleDeleteNearbyUser(e, user.id)} className="absolute top-6 right-6 p-2 text-slate-200 hover:text-accent active:scale-75 transition-all z-20">
+                    <Trash2 className="w-4 h-4" />
+                  </button>
                 )}
                 
                 <div className="flex items-center space-x-4 mb-6">
@@ -410,7 +377,6 @@ const App: React.FC = () => {
                     <div className="w-16 h-16 rounded-2xl border-2 border-slate-50 overflow-hidden bg-brand-light/20">
                       <img src={user.avatar} className="w-full h-full object-cover" />
                     </div>
-                    {/* 在线状态指示器 */}
                     <div className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-white shadow-sm ${getStatusColor(user.lastActive)}`} />
                   </div>
                   <div>
@@ -418,7 +384,10 @@ const App: React.FC = () => {
                     <div className="flex items-center text-brand font-bold text-[10px] mt-0.5"><MapPin className="w-3 h-3 mr-1" />{user.locationName}</div>
                   </div>
                 </div>
-                <button onClick={async () => { setShowMeetupModal(user); const msg = await getIceBreaker(me?.role || '伙伴', user.role, user.status); setIceBreakerMsg(msg); }} className="w-full py-4 bg-slate-900 text-white rounded-2xl font-black text-sm flex items-center justify-center space-x-2 active:scale-95 transition-all shadow-lg">
+                <button 
+                  onClick={() => handleOpenMeetup(user)} 
+                  className="w-full py-4 bg-slate-900 text-white rounded-2xl font-black text-sm flex items-center justify-center space-x-2 active:scale-95 transition-all shadow-lg shadow-slate-200"
+                >
                   <Send className="w-4 h-4" />
                   <span>发起约见</span>
                 </button>
@@ -438,7 +407,7 @@ const App: React.FC = () => {
                 <div 
                   key={req.id} 
                   onClick={() => setSelectedRequest(req)}
-                  className={`bg-white p-5 rounded-[30px] shadow-sm border border-slate-50 mb-2 active:scale-[0.98] transition-all flex items-center justify-between cursor-pointer relative overflow-hidden ${isDeleting === req.id ? 'opacity-0 scale-90' : 'opacity-100'}`}
+                  className={`bg-white p-5 rounded-[30px] shadow-sm border border-slate-50 mb-2 active:scale-[0.98] transition-all flex items-center justify-between cursor-pointer relative overflow-hidden ${isDeleting === req.id ? 'opacity-50' : ''}`}
                 >
                   {req.status === 'accepted' && <div className="absolute top-0 left-0 bottom-0 w-1 bg-brand" />}
                   <div className="flex items-center space-x-4 min-w-0">
@@ -453,7 +422,7 @@ const App: React.FC = () => {
                   </div>
                   <div className="flex items-center space-x-1 shrink-0 ml-2">
                     <span className={`text-[8px] font-black uppercase px-2 py-1 rounded-full ${req.status === 'pending' ? 'bg-accent-light text-accent' : req.status === 'accepted' ? 'bg-brand-light text-brand' : 'bg-slate-50 text-slate-300'}`}>
-                      {req.status === 'pending' ? '待定' : req.status === 'accepted' ? '连结' : '结束'}
+                      {req.status === 'pending' ? '待定' : req.status === 'accepted' ? '连结' : '已拒'}
                     </span>
                     <button onClick={(e) => deleteRequest(e, req.id)} className="p-2 text-slate-200 hover:text-accent transition-all"><Trash2 className="w-3.5 h-3.5" /></button>
                   </div>
@@ -465,7 +434,7 @@ const App: React.FC = () => {
 
         {view === 'profile' && me && (
           <div className="p-6 space-y-6">
-            <div className="bg-white p-8 rounded-[40px] text-center border border-slate-50 shadow-sm relative">
+            <div className="bg-white p-8 rounded-[40px] text-center border border-slate-50 shadow-sm">
                <div className="relative w-24 h-24 mx-auto mb-4">
                  <div className="w-24 h-24 rounded-3xl border-4 border-brand-light p-0.5 shadow-md bg-white overflow-hidden">
                    <img src={me.avatar} className="w-full h-full object-cover" />
@@ -508,17 +477,15 @@ const App: React.FC = () => {
                   <option value={UserRole.CAREGIVER}>我是家属</option>
                   <option value={UserRole.VOLUNTEER}>我是志愿者</option>
                 </select>
-                <input name="status" defaultValue={me?.status} placeholder="当前状态" className="w-full p-5 bg-white rounded-2xl text-base font-bold shadow-sm border border-slate-50 outline-none" />
+                <input name="status" defaultValue={me?.status} placeholder="当前状态 (如: 正在等候、心情不错)" className="w-full p-5 bg-white rounded-2xl text-base font-bold shadow-sm border border-slate-50 outline-none" />
                 <div className="flex items-center space-x-2">
-                  <input name="locationName" defaultValue={me?.locationName} placeholder="位置描述" className="flex-1 p-5 bg-white rounded-2xl text-base font-bold shadow-sm border border-slate-50 outline-none" />
+                  <input name="locationName" defaultValue={me?.locationName} placeholder="位置描述 (如: A座3楼)" className="flex-1 p-5 bg-white rounded-2xl text-base font-bold shadow-sm border border-slate-50 outline-none" />
                   <button type="button" onClick={getGeoLocation} className="p-5 bg-brand text-white rounded-2xl shadow-lg active:scale-90 transition-all"><LocateFixed className={`w-5 h-5 ${isLocating ? 'animate-spin' : ''}`} /></button>
                 </div>
-                <input name="wechatId" required defaultValue={me?.wechatId} placeholder="我的微信号" className="w-full p-5 bg-slate-50 rounded-2xl text-lg font-black outline-none border border-slate-100" />
+                <input name="wechatId" required defaultValue={me?.wechatId} placeholder="微信号 (仅在双方同意后展示)" className="w-full p-5 bg-slate-50 rounded-2xl text-lg font-black outline-none border border-slate-100" />
               </div>
               <div className="pt-2 flex space-x-3">
-                {view === 'edit-profile' && (
-                   <button type="button" onClick={() => setView('profile')} className="w-1/3 py-5 bg-slate-50 text-slate-400 rounded-2xl font-black active:bg-slate-100">取消</button>
-                )}
+                {view === 'edit-profile' && <button type="button" onClick={() => setView('profile')} className="w-1/3 py-5 bg-slate-50 text-slate-400 rounded-2xl font-black active:bg-slate-100">取消</button>}
                 <button type="submit" disabled={isSaving} className="flex-1 py-5 bg-slate-900 text-white rounded-2xl font-black text-xl shadow-xl active:scale-95 transition-all">
                   {isSaving ? <RefreshCcw className="animate-spin w-6 h-6 mx-auto" /> : '同步资料'}
                 </button>
@@ -528,7 +495,42 @@ const App: React.FC = () => {
         )}
       </main>
 
-      {/* 约见详情 */}
+      {/* 破冰邀请模态框 */}
+      {showMeetupModal && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/60 backdrop-blur-sm p-6">
+          <div className="bg-white w-full max-w-md rounded-[45px] p-8 shadow-2xl space-y-8 animate-in slide-in-from-bottom duration-500">
+            <div className="text-center relative">
+              <div className="w-20 h-20 rounded-[25px] mx-auto mb-4 border-2 border-brand-light shadow-md overflow-hidden bg-white">
+                 <img src={showMeetupModal.avatar} className="w-full h-full object-cover" />
+              </div>
+              <h3 className="text-2xl font-black text-slate-800">发起约见</h3>
+              <p className="text-slate-400 text-xs font-bold mt-1">给 {showMeetupModal.nickname} 发送一段暖心邀请</p>
+            </div>
+            <div className="bg-brand-light/40 p-6 rounded-[30px] text-brand-dark italic font-bold text-center border-2 border-white leading-relaxed shadow-inner min-h-[100px] flex items-center justify-center">
+              {isGeneratingMsg ? (
+                <div className="flex flex-col items-center space-y-2 opacity-50">
+                  <Loader2 className="w-6 h-6 animate-spin" />
+                  <span className="text-xs">AI 正在酝酿破冰语...</span>
+                </div>
+              ) : (
+                <span className="text-sm">“{iceBreakerMsg}”</span>
+              )}
+            </div>
+            <div className="grid grid-cols-1 gap-3">
+              <button 
+                onClick={handleSendMeetupRequest} 
+                disabled={isSendingRequest || isGeneratingMsg} 
+                className="w-full py-5 bg-brand text-white rounded-[25px] font-black text-lg shadow-xl active:scale-95 transition-all flex items-center justify-center space-x-3 disabled:opacity-50"
+              >
+                {isSendingRequest ? <RefreshCcw className="animate-spin w-6 h-6" /> : <><Send className="w-6 h-6" /><span>发出邀请</span></>}
+              </button>
+              <button onClick={() => setShowMeetupModal(null)} className="w-full py-4 bg-slate-50 text-slate-300 rounded-[25px] font-black active:bg-slate-100 transition-all">取消</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 约见详情/通知模态框 */}
       {selectedRequest && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-slate-900/40 backdrop-blur-xl">
           <div className="bg-white w-full rounded-[45px] overflow-hidden shadow-2xl animate-in zoom-in duration-300 max-h-[80vh] flex flex-col">
@@ -538,14 +540,21 @@ const App: React.FC = () => {
             </div>
             <div className="flex-1 overflow-y-auto p-6 pt-2 space-y-6">
               <div className="flex items-center space-x-4 bg-brand-light/20 p-5 rounded-[25px]">
-                <div className="relative shrink-0">
-                  <img src={(selectedRequest.from_user_id === me?.id ? selectedRequest.to_profile : selectedRequest.from_profile)?.avatar} className="w-16 h-16 rounded-[20px] shadow-sm border-2 border-white object-cover" />
-                  <div className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-white ${getStatusColor((selectedRequest.from_user_id === me?.id ? selectedRequest.to_profile : selectedRequest.from_profile)?.last_active)}`} />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="text-xl font-black text-slate-800 truncate">{(selectedRequest.from_user_id === me?.id ? selectedRequest.to_profile : selectedRequest.from_profile)?.nickname}</div>
-                  <div className="text-brand font-bold text-[10px] mt-0.5">状态：{(selectedRequest.from_user_id === me?.id ? selectedRequest.to_profile : selectedRequest.from_profile)?.status}</div>
-                </div>
+                {(() => {
+                  const other = selectedRequest.from_user_id === me?.id ? selectedRequest.to_profile : selectedRequest.from_profile;
+                  return (
+                    <>
+                      <div className="relative shrink-0">
+                        <img src={other?.avatar} className="w-16 h-16 rounded-[20px] shadow-sm border-2 border-white object-cover" />
+                        <div className={`absolute -bottom-1 -right-1 w-4 h-4 rounded-full border-2 border-white ${getStatusColor(other?.last_active)}`} />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-xl font-black text-slate-800 truncate">{other?.nickname}</div>
+                        <div className="text-brand font-bold text-[10px] mt-0.5">状态：{other?.status}</div>
+                      </div>
+                    </>
+                  );
+                })()}
               </div>
               <div className="bg-[#F8FBFA] p-6 rounded-[25px] text-slate-700 italic text-base leading-relaxed border border-brand/5 shadow-inner">
                 “{selectedRequest.message}”
@@ -554,33 +563,22 @@ const App: React.FC = () => {
               {selectedRequest.status === 'pending' ? (
                 selectedRequest.to_user_id === me?.id ? (
                   <div className="grid grid-cols-2 gap-3 pt-2">
-                    <button 
-                      disabled={isProcessingAction}
-                      onClick={() => updateRequestStatus(selectedRequest.id, 'accepted')} 
-                      className="py-5 bg-brand text-white rounded-[25px] font-black shadow-lg active:scale-95 transition-all flex items-center justify-center"
-                    >
-                      {isProcessingAction ? <RefreshCcw className="animate-spin w-5 h-5" /> : '接受连结'}
-                    </button>
-                    <button 
-                      disabled={isProcessingAction}
-                      onClick={() => updateRequestStatus(selectedRequest.id, 'rejected')} 
-                      className="py-5 bg-slate-100 text-slate-400 rounded-[25px] font-black active:bg-slate-200 transition-all"
-                    >
-                      婉拒
-                    </button>
+                    <button disabled={isProcessingAction} onClick={() => updateRequestStatus(selectedRequest.id, 'accepted')} className="py-5 bg-brand text-white rounded-[25px] font-black shadow-lg active:scale-95 transition-all flex items-center justify-center">{isProcessingAction ? <RefreshCcw className="animate-spin w-5 h-5" /> : '接受连结'}</button>
+                    <button disabled={isProcessingAction} onClick={() => updateRequestStatus(selectedRequest.id, 'rejected')} className="py-5 bg-slate-100 text-slate-400 rounded-[25px] font-black active:bg-slate-200 transition-all">婉拒</button>
                   </div>
                 ) : (
                   <div className="text-center py-6 bg-slate-50 rounded-[25px] border border-dashed border-slate-200 animate-pulse text-slate-400 font-bold text-sm">等待回应中...</div>
                 )
               ) : selectedRequest.status === 'accepted' ? (
-                <div className="space-y-4 pt-2 animate-in fade-in duration-500">
-                  <div className="text-center p-6 bg-brand/5 rounded-[30px] border border-brand/10 relative">
+                <div className="space-y-4 pt-2">
+                  <div className="text-center p-6 bg-brand/5 rounded-[30px] border border-brand/10">
                     <PartyPopper className="w-8 h-8 text-brand mx-auto mb-3" />
                     <p className="text-slate-400 font-bold text-xs mb-3">伙伴的微信号：</p>
-                    <div className="text-2xl font-black text-brand tracking-widest mb-6">
-                      {(selectedRequest.from_user_id === me?.id ? selectedRequest.to_profile : selectedRequest.from_profile)?.wechat_id}
-                    </div>
-                    <button onClick={() => handleCopyAndOpenWechat((selectedRequest.from_user_id === me?.id ? selectedRequest.to_profile : selectedRequest.from_profile)?.wechat_id)} className="w-full py-5 bg-brand text-white rounded-[25px] font-black shadow-lg flex items-center justify-center space-x-2 active:scale-95 transition-all">
+                    <div className="text-2xl font-black text-brand tracking-widest mb-6">{(selectedRequest.from_user_id === me?.id ? selectedRequest.to_profile : selectedRequest.from_profile)?.wechat_id}</div>
+                    <button onClick={() => {
+                      const wechat = (selectedRequest.from_user_id === me?.id ? selectedRequest.to_profile : selectedRequest.from_profile)?.wechat_id;
+                      navigator.clipboard.writeText(wechat).then(() => { triggerToast('微信号已复制'); setTimeout(() => { window.location.href = 'weixin://'; }, 700); });
+                    }} className="w-full py-5 bg-brand text-white rounded-[25px] font-black shadow-lg flex items-center justify-center space-x-2 active:scale-95 transition-all">
                       <MessageSquare className="w-5 h-5" />
                       <span>复制并去微信</span>
                     </button>
@@ -589,18 +587,34 @@ const App: React.FC = () => {
               ) : (
                 <div className="text-center py-10 bg-slate-50 rounded-[30px] flex flex-col items-center">
                   <XCircle className="w-10 h-10 text-slate-200 mb-2" />
-                  <p className="text-slate-300 font-bold">对话已结束</p>
+                  <p className="text-slate-300 font-bold">已谢绝</p>
                 </div>
               )}
               
-              <button onClick={(e) => deleteRequest(e, selectedRequest.id)} className="w-full py-3 text-slate-200 hover:text-accent font-bold text-xs border-2 border-dashed border-slate-50 rounded-[20px] flex items-center justify-center space-x-2 active:bg-slate-50 transition-all">
-                <Trash2 className="w-3.5 h-3.5" />
-                <span>移除记录</span>
-              </button>
+              <button onClick={(e) => deleteRequest(e, selectedRequest.id)} className="w-full py-3 text-slate-200 hover:text-accent font-bold text-xs border-2 border-dashed border-slate-50 rounded-[20px] flex items-center justify-center space-x-2 active:bg-slate-50 transition-all"><Trash2 className="w-3.5 h-3.5" /><span>移除记录</span></button>
             </div>
           </div>
         </div>
       )}
+
+      {/* 底部导航栏 */}
+      <nav className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-white/90 backdrop-blur-2xl px-12 py-4 pb-8 flex justify-between items-center z-40 rounded-t-[40px] shadow-[0_-10px_40px_rgba(0,0,0,0.03)] border-t border-slate-50">
+        {[
+          { id: 'home', label: '首页', icon: Smile },
+          { id: 'nearby', label: '发现', icon: Heart },
+          { id: 'messages', label: '通知', icon: Bell },
+          { id: 'profile', label: '我的', icon: User }
+        ].map(item => (
+          <button 
+            key={item.id} 
+            onClick={() => me ? setView(item.id as any) : setView('setup')} 
+            className={`flex flex-col items-center transition-all duration-300 ${view === item.id ? 'text-brand scale-105' : 'text-slate-300'}`}
+          >
+            <item.icon className={`w-6 h-6 transition-colors ${view === item.id ? 'fill-current' : ''}`} />
+            <span className={`text-[9px] font-black uppercase tracking-tighter mt-1 ${view === item.id ? 'opacity-100' : 'opacity-60'}`}>{item.label}</span>
+          </button>
+        ))}
+      </nav>
     </div>
   );
 };
