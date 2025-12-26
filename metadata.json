@@ -1,0 +1,7 @@
+{
+  "name": "暖遇 (Warm Connect) - 患友互助社区",
+  "description": "一个专为肿瘤患者及家属设计的基于地理位置的轻社交应用。帮助在同一医院或区域的患友安全、低负担地发现彼此并开启交流。",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}
